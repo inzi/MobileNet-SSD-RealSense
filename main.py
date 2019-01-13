@@ -46,6 +46,8 @@ fps = ""
 detectfps = ""
 framecount = 0
 detectframecount = 0
+frametimestamps = []
+inferredframesfordisplay = []
 time1 = 0
 time2 = 0
 cam = None
@@ -91,6 +93,9 @@ def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_he
     global align_to
     global align
 
+    global frametimestamps
+    global inferredframesfordisplay
+
     # Configure depth and color streams
     #  Or
     # Open USB Camera streams
@@ -116,11 +121,16 @@ def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_he
     # #     window_name = "USB Camera"
 
     cam =  VideoStream(usePiCamera=True, 
-                                        resolution=(1920, 1088),
+                                        resolution=(640, 480),
                                         framerate = 32).start()
     window_name = "picam"
     
     cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+
+    inference_engine_responded = False
+    print ('warming up...')
+    thisframe_timestamp = 0 
+    last_frame_shown = 0
 
     while True:
         t1 = time.perf_counter()
@@ -128,33 +138,139 @@ def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_he
         # 0:= RealSense Mode
         # 1:= USB Camera Mode
 
+        if not frameBuffer.full():
+            # continue
+            #frameBuffer.get()
+            # USB Camera Stream Read
+            color_image = cam.read()
+            
+            frames = color_image
 
-        # USB Camera Stream Read
-        color_image = cam.read()
-        if frameBuffer.full():
-            #continue
-            frameBuffer.get()
-        frames = color_image
-
-        height = color_image.shape[0]
-        width = color_image.shape[1]
-        frameBuffer.put(color_image.copy())
+            height = color_image.shape[0]
+            width = color_image.shape[1]
+            # thisframe_timestamp = int(round(time.time() * 1000))
+            thisframe_timestamp += 1
+            # print ('Generated: {}                             g'.format(thisframe_timestamp))
+            frameBuffer.put([color_image.copy(), thisframe_timestamp])
+            heapq.heappush(frametimestamps, thisframe_timestamp)
+            # print (' -- frametimestamps len: {}'.format(len(frametimestamps)))
         res = None
 
         if not results.empty():
-            res = results.get(False)
+            orig_img, res, inf_frame_timestamp = results.get(False)
+
             #print ('{} Results'.format(len(res)))
+            # if inference_engine_responded == False:
+            #     #clear frametimestamps
+            #     frametimestamps = []
+            #     heapq.heappush(frametimestamps, inf_frame_timestamp)
+            #     heapq.heappush
+            #     inference_engine_responded = True
             detectframecount += 1
-            imdraw = overlay_on_image(frames, res, LABELS, camera_mode, background_transparent_mode,
-                                      background_img, depth_scale=depth_scale, align=align)
+            imdraw = overlay_on_image(orig_img, inf_frame_timestamp,res, LABELS, camera_mode, background_transparent_mode,
+                                      background_img, depth_scale=depth_scale, align=align, )
             lastresults = res
+
+            heapq.heappush(inferredframesfordisplay, (inf_frame_timestamp, imdraw))
+            _infts, _imgdraw = inferredframesfordisplay[0]
+
+            # print ('                                   showing {}'.format(_infts))
+            if len(frametimestamps)>0:
+                if _infts == frametimestamps[0]:
+                    print ('expecting {} got {}  last {}    showing {}'.format(frametimestamps[0], inf_frame_timestamp, last_frame_shown, _infts))
+                    heapq.heappop(frametimestamps)  
+                    cv2.imshow(window_name, cv2.resize(imdraw, (width, height)))
+                    heapq.heappop(inferredframesfordisplay)
+                    if last_frame_shown+1 != _infts:
+                        print ('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+                    last_frame_shown += 1
+
+
+            # heapq.heappush(inferredframesfordisplay, (inf_frame_timestamp, imdraw))
+            # play_to = last_frame_shown
+            # while len(inferredframesfordisplay)>0 and inferredframesfordisplay[0][:1][0]<=play_to:
+            #             _infts, _imgdraw = heapq.heappop(inferredframesfordisplay)
+            #             if len(frametimestamps)>0:
+            #                 _lowts = frametimestamps[0]
+            #             else:
+            #                 _lowts = _infts
+
+            #             print ('                                   showing {}'.format(_infts))
+
+            #             cv2.imshow(window_name, cv2.resize(imdraw, (width, height)))
+            #             if len(frametimestamps)>1:
+            #                 print ('popping {}                               p'.format(_lowts))
+            #                 heapq.heappop(frametimestamps)
+            #             last_frame_shown = _infts
+
+            # catchup = True
+            # while catchup:
+            #     if len(inferredframesfordisplay)>0:
+            #         _infts, _imgdraw = inferredframesfordisplay[0]
+            #         if len(frametimestamps)>0:
+            #             _lowts = frametimestamps[0]
+            #         else:
+            #             _lowts = _infts
+
+            #         # print ('Testing {} against lowest {}'.format(_infts, _lowts))
+            #         if _infts < _lowts:
+            #             print ('                                   showing {}'.format(_infts))
+            #             cv2.imshow(window_name, cv2.resize(imdraw, (width, height)))
+            #             heapq.heappop(inferredframesfordisplay)
+
+            #         if _infts == _lowts:
+            #             if len(frametimestamps)>1:
+            #                 # print ('popping {}                               p'.format(_lowts))
+            #                 heapq.heappop(frametimestamps)
+            #             if len(frametimestamps)>0:
+            #                 print ('new low: {}'.format(frametimestamps[0]))
+            #             # print ('lowts {}   :::  lowinfts {}'.format(len(frametimestamps), len(inferredframesfordisplay)))
+            #             catchup = False
+                    
+            #         if _infts > _lowts:
+            #             print ('ooo frame {} - lowts {}   :::  lowinfts {}'.format(_infts, len(frametimestamps), len(inferredframesfordisplay)))
+            #             catchup = False
+            #     else:
+            #         # print ('lowts {}   ---  lowinfts none'.format(len(frametimestamps)))
+            #         catchup = False
+                        
+
+            # lowts = frametimestamps[0]
+            # print ('lowts: {}  inf_frame_timestamp: {}'.format(lowts, inf_frame_timestamp))
+            # if inf_frame_timestamp == lowts:
+            #     heapq.heappop(frametimestamps)
+
+            #     cv2.imshow(window_name, cv2.resize(imdraw, (width, height)))
+            #     # catch up any frames
+
+            # lowts = frametimestamps[0]
+            # waiting_frame_ts = lowts
+            # while True:
+            #     _waiting_frame_ts, _i = inferredframesfordisplay[0]
+            #     if _waiting_frame_ts <= lowts:
+            #         _inf, _imgdraw = heapq.heappop(inferredframesfordisplay)
+            #         cv2.imshow(window_name, cv2.resize(imdraw, (width, height)))
+            #     if _waiting_frame_ts > lowts:
+            #         waiting_frame_ts = _waiting_frame_ts
+            #         break
+            # heapq.heappush(frametimestamps, waiting_frame_ts)
+
+
+            # while 
+            #     waiting_frame_ts = inferredframesfordisplay[0]
+            #     if waiting_frame_ts <= lowts:
+            #         _inf, _imgdraw = heapq.heappop(inferredframesfordisplay)
+            #         cv2.imshow(window_name, cv2.resize(imdraw, (width, height)))
+                
+
+
         else:
             # print ('waiting on results')
             continue
             # imdraw = overlay_on_image(frames, lastresults, LABELS, camera_mode, background_transparent_mode,
             #                           background_img, depth_scale=depth_scale, align=align)
 
-        cv2.imshow(window_name, cv2.resize(imdraw, (width, height)))
+        # cv2.imshow(window_name, cv2.resize(imdraw, (width, height)))
 
         if cv2.waitKey(1)&0xFF == ord('q'):
             # Stop streaming
@@ -207,8 +323,10 @@ class NcsWorker(object):
 
         self.camera_width = camera_width
         self.camera_height = camera_height
-        self.num_requests = 8
+        self.num_requests = 4
         self.inferred_request = [0] * self.num_requests
+        self.orig_images = [0] * self.num_requests
+        self.lowest_reqnum = 1
         self.heap_request = []
         self.inferred_cnt = 0
         self.plugin = IEPlugin(device="MYRIAD")
@@ -249,32 +367,51 @@ class NcsWorker(object):
             #    self.frameBuffer.get()
             #    return
             # self.roop_frame = 0
-            
 
-            prepimg = self.image_preprocessing(self.frameBuffer.get())
+            # orig_img, frame_timestamp = self.frameBuffer.get()
+            # print ('pulled {}                       <'.format(frame_timestamp))
+            # prepimg = self.image_preprocessing(orig_img)
             reqnum = searchlist(self.inferred_request, 0)
 
             if reqnum > -1:
+                orig_img, frame_timestamp = self.frameBuffer.get()
+                # print ('pulled {}                       <'.format(frame_timestamp))
+                prepimg = self.image_preprocessing(orig_img)
+                # reqnum = searchlist(self.inferred_request, 0)
                 self.exec_net.start_async(request_id=reqnum, inputs={self.input_blob: prepimg})
                 self.inferred_request[reqnum] = 1
+                self.orig_images[reqnum] = orig_img
                 self.inferred_cnt += 1
-                print ('started {} - maxsize {} - inferred_cnt {}'.format(reqnum, sys.maxsize, self.inferred_cnt))
+                # print ('started {} - inferred_cnt {}'.format(reqnum, self.inferred_cnt))
                 if self.inferred_cnt == sys.maxsize: #This basically says if the # is the max # the OS can support, go back to zero.
                     self.inferred_request = [0] * self.num_requests
                     self.heap_request = []
                     self.inferred_cnt = 0
-                heapq.heappush(self.heap_request, (self.inferred_cnt, reqnum))
+                heapq.heappush(self.heap_request, (self.inferred_cnt, reqnum, frame_timestamp))
+            # else:
+            #     print('Passing {}              !!!!!!!!!!!!!!!!'.format(frame_timestamp))
+            # to access lowest heap item without pop heap[0]
+            # cnt, dev = self.heap_request[0]
 
-            cnt, dev = heapq.heappop(self.heap_request)
-            print ('heappop cnt {} dev {}'.format(cnt, dev))
+            # print (self.heap_request[0])
 
-            if self.exec_net.requests[dev].wait(0) == 0:
+            cnt, dev, inf_frame_timestamp = heapq.heappop(self.heap_request)
+            #print ('heappop cnt {} dev {}'.format(cnt, dev))
+
+            dev_wait_state = self.exec_net.requests[dev].wait(0)
+            if dev_wait_state == 0:
+                #done with this request
                 self.exec_net.requests[dev].wait(-1)
                 out = self.exec_net.requests[dev].outputs["detection_out"].flatten()
-                self.results.put([out])
+                # print ('Completed {}               >'.format(inf_frame_timestamp))
+                self.results.put([self.orig_images[dev],[out], inf_frame_timestamp])
                 self.inferred_request[dev] = 0
+                self.orig_images[dev] = None
             else:
-                heapq.heappush(self.heap_request, (cnt, dev))
+                # destroy self.
+                # print ('repush - dev wait state {}'.format(dev_wait_state))
+                # print ('Passed {}                               ?'.format(inf_frame_timestamp))
+                heapq.heappush(self.heap_request, (cnt, dev, inf_frame_timestamp))
 
         except:
             import traceback
@@ -294,7 +431,7 @@ def inferencer(results, frameBuffer, ssd_detection_mode, face_detection_mode, ca
         th.join()
 
 
-def overlay_on_image(frames, object_infos, LABELS, camera_mode, background_transparent_mode, background_img, depth_scale=1.0, align=None):
+def overlay_on_image(frames, inf_frame_timestamp, object_infos, LABELS, camera_mode, background_transparent_mode, background_img, depth_scale=1.0, align=None):
 
     try:
 
@@ -384,6 +521,8 @@ def overlay_on_image(frames, object_infos, LABELS, camera_mode, background_trans
                 label_bottom = label_top + label_size[1]
                 cv2.rectangle(img_cp, (label_left - 1, label_top - 1), (label_right + 1, label_bottom + 1), label_background_color, -1)
                 cv2.putText(img_cp, label_text, (label_left, label_bottom), cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_text_color, 1)
+                frame_text_color = (200,100,50)
+                cv2.putText(img_cp, str(inf_frame_timestamp), (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, frame_text_color, 1)
 
       
         cv2.putText(img_cp, fps,       (width-170,15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (38,0,255), 1, cv2.LINE_AA)
