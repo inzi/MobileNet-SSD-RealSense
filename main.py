@@ -120,9 +120,17 @@ def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_he
     # #     cam.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
     # #     window_name = "USB Camera"
 
+
+    # 1296x972
+    # 1296, 730
+    # 800, 600 - 60 (12+ fps) (GPU upscaled 640x480)
+    # 800,600 - 20 10+
+    # 1024, 768 - 42 (6+ fps)
+    # 1024, 768 - 20 (6+)
+    # 640, 480 - 90 (17+ fps)
     cam =  VideoStream(usePiCamera=True, 
                                         resolution=(640, 480),
-                                        framerate = 32).start()
+                                        framerate = 90).start()
     window_name = "picam"
     
     cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
@@ -131,7 +139,6 @@ def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_he
     print ('warming up...')
     thisframe_timestamp = 0 
     last_frame_shown = 0
-
     while True:
         t1 = time.perf_counter()
 
@@ -148,8 +155,8 @@ def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_he
 
             height = color_image.shape[0]
             width = color_image.shape[1]
-            # thisframe_timestamp = int(round(time.time() * 1000))
-            thisframe_timestamp += 1
+            thisframe_timestamp = int(round(time.time() * 1000))
+            # thisframe_timestamp += 1
             # print ('Generated: {}                             g'.format(thisframe_timestamp))
             frameBuffer.put([color_image.copy(), thisframe_timestamp])
             heapq.heappush(frametimestamps, thisframe_timestamp)
@@ -177,13 +184,11 @@ def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_he
             # print ('                                   showing {}'.format(_infts))
             if len(frametimestamps)>0:
                 if _infts == frametimestamps[0]:
-                    print ('expecting {} got {}  last {}    showing {}'.format(frametimestamps[0], inf_frame_timestamp, last_frame_shown, _infts))
+                    # print ('expecting {} got {}  last {}    showing {}'.format(frametimestamps[0], inf_frame_timestamp, last_frame_shown, _infts))
                     heapq.heappop(frametimestamps)  
                     cv2.imshow(window_name, cv2.resize(imdraw, (width, height)))
                     heapq.heappop(inferredframesfordisplay)
-                    if last_frame_shown+1 != _infts:
-                        print ('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
-                    last_frame_shown += 1
+                    last_frame_shown = _infts
 
 
             # heapq.heappush(inferredframesfordisplay, (inf_frame_timestamp, imdraw))
