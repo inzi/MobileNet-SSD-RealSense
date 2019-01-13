@@ -32,7 +32,7 @@ settings.configure(DATABASES=bbsettings.DATABASES, DEBUG=True)
 django.setup()
 
 #from captures.models import Capture
-print ('starting...')
+print ('starting... {}'.format(__name__))
 
 
 
@@ -70,6 +70,12 @@ LABELS = [['background',
            'motorbike', 'person', 'pottedplant',
            'sheep', 'sofa', 'train', 'tvmonitor'],
           ['background', 'face']]
+
+
+
+LABELS = [['background',
+           'vehicle','label2','label3'],['background','face']]
+          
 
 def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_height, background_transparent_mode, background_img, vidfps):
     global fps
@@ -110,7 +116,7 @@ def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_he
     # #     window_name = "USB Camera"
 
     cam =  VideoStream(usePiCamera=True, 
-                                        resolution=(640, 480),
+                                        resolution=(1920, 1088),
                                         framerate = 32).start()
     window_name = "picam"
     
@@ -126,6 +132,7 @@ def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_he
         # USB Camera Stream Read
         color_image = cam.read()
         if frameBuffer.full():
+            #continue
             frameBuffer.get()
         frames = color_image
 
@@ -136,11 +143,13 @@ def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_he
 
         if not results.empty():
             res = results.get(False)
+            #print ('{} Results'.format(len(res)))
             detectframecount += 1
             imdraw = overlay_on_image(frames, res, LABELS, camera_mode, background_transparent_mode,
                                       background_img, depth_scale=depth_scale, align=align)
             lastresults = res
         else:
+            # print ('waiting on results')
             continue
             # imdraw = overlay_on_image(frames, lastresults, LABELS, camera_mode, background_transparent_mode,
             #                           background_img, depth_scale=depth_scale, align=align)
@@ -190,11 +199,15 @@ class NcsWorker(object):
     def __init__(self, devid, frameBuffer, results, camera_mode, camera_width, camera_height, number_of_ncs, vidfps, skpfrm):
         self.devid = devid
         self.frameBuffer = frameBuffer
-        self.model_xml = "./lrmodel/MobileNetSSD/MobileNetSSD_deploy.xml"
-        self.model_bin = "./lrmodel/MobileNetSSD/MobileNetSSD_deploy.bin"
+        # self.model_xml = "./lrmodel/MobileNetSSD/MobileNetSSD_deploy.xml"
+        # self.model_bin = "./lrmodel/MobileNetSSD/MobileNetSSD_deploy.bin"
+        self.model_xml = "./lrmodel/MobileNetSSD/vehicle-detection-adas-0002.xml"
+        self.model_bin = "./lrmodel/MobileNetSSD/vehicle-detection-adas-0002.bin"
+
+
         self.camera_width = camera_width
         self.camera_height = camera_height
-        self.num_requests = 4
+        self.num_requests = 8
         self.inferred_request = [0] * self.num_requests
         self.heap_request = []
         self.inferred_cnt = 0
@@ -214,11 +227,13 @@ class NcsWorker(object):
 
     def image_preprocessing(self, color_image):
 
-        prepimg = cv2.resize(color_image, (300, 300))
-        prepimg = prepimg - 127.5
-        prepimg = prepimg * 0.007843
+        # prepimg = cv2.resize(color_image, (300, 300))
+        prepimg = cv2.resize(color_image, (672, 384))
+        # prepimg = prepimg - 127.5
+        # prepimg = prepimg * 0.007843
         prepimg = prepimg[np.newaxis, :, :, :]     # Batch size axis add
         prepimg = prepimg.transpose((0, 3, 1, 2))  # NHWC to NCHW
+        
         return prepimg
 
 
@@ -226,13 +241,15 @@ class NcsWorker(object):
         try:
 
             if self.frameBuffer.empty():
+                #print ('waiting on cam')
                 return
 
-            self.roop_frame += 1
-            if self.roop_frame <= self.skip_frame:
-               self.frameBuffer.get()
-               return
-            self.roop_frame = 0
+            # self.roop_frame += 1
+            # if self.roop_frame <= self.skip_frame:
+            #    self.frameBuffer.get()
+            #    return
+            # self.roop_frame = 0
+            
 
             prepimg = self.image_preprocessing(self.frameBuffer.get())
             reqnum = searchlist(self.inferred_request, 0)
@@ -241,13 +258,15 @@ class NcsWorker(object):
                 self.exec_net.start_async(request_id=reqnum, inputs={self.input_blob: prepimg})
                 self.inferred_request[reqnum] = 1
                 self.inferred_cnt += 1
-                if self.inferred_cnt == sys.maxsize:
+                print ('started {} - maxsize {} - inferred_cnt {}'.format(reqnum, sys.maxsize, self.inferred_cnt))
+                if self.inferred_cnt == sys.maxsize: #This basically says if the # is the max # the OS can support, go back to zero.
                     self.inferred_request = [0] * self.num_requests
                     self.heap_request = []
                     self.inferred_cnt = 0
                 heapq.heappush(self.heap_request, (self.inferred_cnt, reqnum))
 
             cnt, dev = heapq.heappop(self.heap_request)
+            print ('heappop cnt {} dev {}'.format(cnt, dev))
 
             if self.exec_net.requests[dev].wait(0) == 0:
                 self.exec_net.requests[dev].wait(-1)
@@ -302,6 +321,7 @@ def overlay_on_image(frames, object_infos, LABELS, camera_mode, background_trans
             img_cp = background_img.copy()
 
         for (object_info, LABEL) in zip(object_infos, LABELS):
+            
 
             drawing_initial_flag = True
 
@@ -326,10 +346,12 @@ def overlay_on_image(frames, object_infos, LABELS, camera_mode, background_trans
                 object_info_overlay = object_info[base_index:base_index + 7]
 
                 # 0:= No background transparent, 1:= Background transparent
-                if background_transparent_mode == 0:
-                    min_score_percent = 60
-                elif background_transparent_mode == 1:
-                    min_score_percent = 20
+                # if background_transparent_mode == 0:
+                #     min_score_percent = 30
+                # elif background_transparent_mode == 1:
+                #     min_score_percent = 20
+
+                min_score_percent = 10
 
                 source_image_width = width
                 source_image_height = height
