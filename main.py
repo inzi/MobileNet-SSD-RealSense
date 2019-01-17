@@ -76,7 +76,7 @@ LABELS = [['background',
 
 
 LABELS = [['background',
-           'vehicle','label2','label3'],['background','face']]
+           'vehicle','label2','label3'],['background','ar2-1','ar2-2']]
           
 
 def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_height, background_transparent_mode, background_img, vidfps):
@@ -128,11 +128,26 @@ def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_he
     # 1024, 768 - 42 (6+ fps)
     # 1024, 768 - 20 (6+)
     # 640, 480 - 90 (17+ fps)
-    cam =  VideoStream(usePiCamera=True, 
+    # cam =  VideoStream(usePiCamera=True, 
+    #                                     resolution=(640, 480),
+    #                                     framerate = 90).start()
+    window_name = "picam"
+
+    use_file = True
+    
+    print ('opening...')
+    if use_file:
+        cam = cv2.VideoCapture('file:///home/pi/Videos/traffic1-xvid.avi')
+
+    else:
+        cam =  VideoStream(usePiCamera=True, 
                                         resolution=(640, 480),
                                         framerate = 90).start()
-    window_name = "picam"
-    
+
+    # cam = VideoStream('~/Videos/traffic1.mp4', resolution=(640,480), framerate=30).start()
+    # cam = cv2.VideoCapture('~/Videos/traffic1.mpg')
+    # cam = cv2.VideoCapture('file:///home/pi/Videos/traffic1-xvid.avi')
+    print ('opened...')
     cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
 
     inference_engine_responded = False
@@ -148,13 +163,20 @@ def camThread(LABELS, results, frameBuffer, camera_mode, camera_width, camera_he
         if not frameBuffer.full():
             # continue
             #frameBuffer.get()
-            # USB Camera Stream Read
-            color_image = cam.read()
-            
+            if use_file:
+                _success, color_image = cam.read()
+                color_image = cv2.resize(color_image, (640,480))
+            else:
+                # USB Camera Stream Read
+                color_image = cam.read()
+
             frames = color_image
 
-            height = color_image.shape[0]
-            width = color_image.shape[1]
+            # height = color_image.shape[0]
+            # width = color_image.shape[1]
+            width = 640 #int(cam.get(3)) #int(cam.get(cv2.CV_CAP_PROP_FRAME_WIDTH) )  # float
+            height = 480 #int(cam.get(4)) #int(cam.get(cv2.CV_CAP_PROP_FRAME_HEIGHT) )# float
+
             thisframe_timestamp = int(round(time.time() * 1000))
             # thisframe_timestamp += 1
             # print ('Generated: {}                             g'.format(thisframe_timestamp))
@@ -324,6 +346,8 @@ class NcsWorker(object):
         # self.model_bin = "./lrmodel/MobileNetSSD/MobileNetSSD_deploy.bin"
         self.model_xml = "./lrmodel/MobileNetSSD/vehicle-detection-adas-0002.xml"
         self.model_bin = "./lrmodel/MobileNetSSD/vehicle-detection-adas-0002.bin"
+        # self.model_xml = "./lrmodel/MobileNetSSD/vehicle-license-plate-detection-barrier-0106.xml"
+        # self.model_bin = "./lrmodel/MobileNetSSD/vehicle-license-plate-detection-barrier-0106.bin"
 
 
         self.camera_width = camera_width
@@ -351,12 +375,16 @@ class NcsWorker(object):
     def image_preprocessing(self, color_image):
 
         # prepimg = cv2.resize(color_image, (300, 300))
-        prepimg = cv2.resize(color_image, (672, 384))
-        # prepimg = prepimg - 127.5
-        # prepimg = prepimg * 0.007843
+        prepimg = cv2.resize(color_image, (672, 384)) #vehicle-detection-adas-0002
         prepimg = prepimg[np.newaxis, :, :, :]     # Batch size axis add
         prepimg = prepimg.transpose((0, 3, 1, 2))  # NHWC to NCHW
-        
+       
+        # prepimg = cv2.resize(color_image, (300,300)) #vehicle-license-plate-detection-barrier-0106
+        # prepimg = prepimg - 127.5
+        # prepimg = prepimg * 0.007843
+        # prepimg = prepimg[np.newaxis, :, :, :]     # Batch size axis add
+        # prepimg = prepimg.transpose((0, 3, 1, 2))  # NHWC to NCHW (new axis, color, height width)
+
         return prepimg
 
 
@@ -399,24 +427,26 @@ class NcsWorker(object):
             # cnt, dev = self.heap_request[0]
 
             # print (self.heap_request[0])
+            if len(self.heap_request)>0:
+                cnt, dev, inf_frame_timestamp = heapq.heappop(self.heap_request)
+                #print ('heappop cnt {} dev {}'.format(cnt, dev))
 
-            cnt, dev, inf_frame_timestamp = heapq.heappop(self.heap_request)
-            #print ('heappop cnt {} dev {}'.format(cnt, dev))
+                dev_wait_state = self.exec_net.requests[dev].wait(0)
+                if dev_wait_state == 0:
+                    #done with this request
+                    self.exec_net.requests[dev].wait(-1)
 
-            dev_wait_state = self.exec_net.requests[dev].wait(0)
-            if dev_wait_state == 0:
-                #done with this request
-                self.exec_net.requests[dev].wait(-1)
-                out = self.exec_net.requests[dev].outputs["detection_out"].flatten()
-                # print ('Completed {}               >'.format(inf_frame_timestamp))
-                self.results.put([self.orig_images[dev],[out], inf_frame_timestamp])
-                self.inferred_request[dev] = 0
-                self.orig_images[dev] = None
-            else:
-                # destroy self.
-                # print ('repush - dev wait state {}'.format(dev_wait_state))
-                # print ('Passed {}                               ?'.format(inf_frame_timestamp))
-                heapq.heappush(self.heap_request, (cnt, dev, inf_frame_timestamp))
+                    out = self.exec_net.requests[dev].outputs["detection_out"].flatten()
+                    # out = self.exec_net.requests[dev].outputs["DetectionOutput_"].flatten() #vehicle-license-plate-detection-barrier-0106
+                    # print ('Completed {}               >'.format(inf_frame_timestamp))
+                    self.results.put([self.orig_images[dev],[out], inf_frame_timestamp])
+                    self.inferred_request[dev] = 0
+                    self.orig_images[dev] = None
+                else:
+                    # destroy self.
+                    # print ('repush - dev wait state {}'.format(dev_wait_state))
+                    # print ('Passed {}                               ?'.format(inf_frame_timestamp))
+                    heapq.heappush(self.heap_request, (cnt, dev, inf_frame_timestamp))
 
         except:
             import traceback
@@ -462,7 +492,8 @@ def overlay_on_image(frames, inf_frame_timestamp, object_infos, LABELS, camera_m
         elif background_transparent_mode == 1:
             img_cp = background_img.copy()
 
-        for (object_info, LABEL) in zip(object_infos, LABELS):
+        # for (object_info, LABEL) in zip(object_infos, LABELS):
+        for object_info in object_infos:
             
 
             drawing_initial_flag = True
@@ -500,6 +531,8 @@ def overlay_on_image(frames, inf_frame_timestamp, object_infos, LABELS, camera_m
 
                 base_index = 0
                 class_id = object_info_overlay[base_index + 1]
+                # print ('class_id: ',class_id)
+                LABEL = LABELS[int(class_id)]
                 percentage = int(object_info_overlay[base_index + 2] * 100)
                 if (percentage <= min_score_percent):
                     continue
